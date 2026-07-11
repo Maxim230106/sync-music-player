@@ -17,6 +17,7 @@
 #include <QMouseEvent>
 #include <QNetworkAddressEntry>
 #include <QNetworkInterface>
+#include <QPalette>
 #include <QPixmap>
 #include <QPushButton>
 #include <QGuiApplication>
@@ -223,6 +224,7 @@ MainWindow::MainWindow(MusicDirectoryMode musicDirectoryMode, QWidget* parent)
     }
     statusBar()->showMessage("Session controller is ready. Start host or connect as client.");
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(
         qGuiApp->styleHints(),
         &QStyleHints::colorSchemeChanged,
@@ -233,9 +235,17 @@ MainWindow::MainWindow(MusicDirectoryMode musicDirectoryMode, QWidget* parent)
             updateModeUi();
         }
     );
+#else
+    connect(qGuiApp, &QGuiApplication::paletteChanged, this, [this](const QPalette&) {
+        refreshTheme();
+        applyPalette();
+        updateModeUi();
+    });
+#endif
 }
 
 bool MainWindow::shouldUseDarkTheme() const {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     const Qt::ColorScheme scheme = qGuiApp->styleHints()->colorScheme();
     if (scheme == Qt::ColorScheme::Light) {
         return false;
@@ -244,6 +254,12 @@ bool MainWindow::shouldUseDarkTheme() const {
     if (scheme == Qt::ColorScheme::Dark) {
         return true;
     }
+#else
+    const QColor windowColor = qGuiApp->palette().color(QPalette::Window);
+    if (windowColor.isValid()) {
+        return windowColor.lightness() < 128;
+    }
+#endif
 
     return true;
 }
