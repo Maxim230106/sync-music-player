@@ -17,7 +17,15 @@
 #include <QUrl>
 
 #include <algorithm>
+#include <cstdio>
 #include <memory>
+
+#ifdef _WIN32
+    #include <io.h>
+#else
+    #include <fcntl.h>
+    #include <unistd.h>
+#endif
 
 namespace {
 
@@ -123,6 +131,66 @@ QString sanitize_file_name(const QString& value) {
     return result;
 }
 
+class ScopedStderrSilencer {
+public:
+    ScopedStderrSilencer() {
+#ifdef _WIN32
+        savedDescriptor_ = _dup(_fileno(stderr));
+        if (savedDescriptor_ < 0) {
+            return;
+        }
+
+        FILE* nullStream = nullptr;
+        if (freopen_s(&nullStream, "NUL", "w", stderr) != 0 || nullStream == nullptr) {
+            _close(savedDescriptor_);
+            savedDescriptor_ = -1;
+        }
+#else
+        savedDescriptor_ = dup(fileno(stderr));
+        if (savedDescriptor_ < 0) {
+            return;
+        }
+
+        const int nullDescriptor = open("/dev/null", O_WRONLY);
+        if (nullDescriptor < 0) {
+            close(savedDescriptor_);
+            savedDescriptor_ = -1;
+            return;
+        }
+
+        if (dup2(nullDescriptor, fileno(stderr)) < 0) {
+            close(nullDescriptor);
+            close(savedDescriptor_);
+            savedDescriptor_ = -1;
+            return;
+        }
+
+        close(nullDescriptor);
+#endif
+    }
+
+    ~ScopedStderrSilencer() {
+        if (savedDescriptor_ < 0) {
+            return;
+        }
+
+        fflush(stderr);
+#ifdef _WIN32
+        _dup2(savedDescriptor_, _fileno(stderr));
+        _close(savedDescriptor_);
+#else
+        dup2(savedDescriptor_, fileno(stderr));
+        close(savedDescriptor_);
+#endif
+    }
+
+    ScopedStderrSilencer(const ScopedStderrSilencer&) = delete;
+    ScopedStderrSilencer& operator=(const ScopedStderrSilencer&) = delete;
+
+private:
+    int savedDescriptor_ = -1;
+};
+
 class QtPlaybackEngine {
 public:
     QtPlaybackEngine() {
@@ -147,6 +215,7 @@ public:
             return false;
         }
 
+        ScopedStderrSilencer silenceBackendNoise;
         player_.setSource(QUrl::fromLocalFile(path));
         wait_for_media_state();
 

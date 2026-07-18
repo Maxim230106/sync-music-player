@@ -48,10 +48,10 @@ jobs:
           mkdir -p package/SyncMusicPlayer-Windows
           cp build/sync-music-player.exe package/SyncMusicPlayer-Windows/
           cp -r build/music package/SyncMusicPlayer-Windows/music
-          if [ -d assets ]; then
-            cp -r assets package/SyncMusicPlayer-Windows/assets
-          fi
           windeployqt6.exe --no-translations --release package/SyncMusicPlayer-Windows/sync-music-player.exe
+          cp "$(g++ -print-file-name=libstdc++-6.dll)" package/SyncMusicPlayer-Windows/
+          cp "$(g++ -print-file-name=libgcc_s_seh-1.dll)" package/SyncMusicPlayer-Windows/
+          cp "$(g++ -print-file-name=libwinpthread-1.dll)" package/SyncMusicPlayer-Windows/
 
       - name: Archive Windows package
         shell: pwsh
@@ -95,9 +95,6 @@ jobs:
           mkdir -p package/SyncMusicPlayer-Linux
           cp build/sync-music-player package/SyncMusicPlayer-Linux/
           cp -r build/music package/SyncMusicPlayer-Linux/music
-          if [ -d assets ]; then
-            cp -r assets package/SyncMusicPlayer-Linux/assets
-          fi
           cat > package/SyncMusicPlayer-Linux/README-LINUX.txt <<'EOF'
           Run:
             ./sync-music-player
@@ -106,9 +103,9 @@ jobs:
             ./sync-music-player --dev
 
           Note:
-            This Linux archive contains the built application and project assets.
-            On another Ubuntu system you may still need Qt 6 runtime packages
-            if they are not already installed.
+            This Linux archive contains the built application and the music folder.
+            On another Linux system you may still need compatible system libraries
+            and Qt 6 runtime packages if they are not already installed.
           EOF
 
       - name: Archive Linux package

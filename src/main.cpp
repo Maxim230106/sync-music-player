@@ -8,18 +8,27 @@
 #ifdef _WIN32
     #include <windows.h>
     #include <cstdio>
+    #include <io.h>
+#else
+    #include <fcntl.h>
+    #include <unistd.h>
 #endif
 
 namespace {
 
-void suppress_qt_multimedia_logs() {
-    QLoggingCategory::setFilterRules(
-        QStringLiteral(
-            "qt.multimedia.*=false\n"
-            "qt.multimedia.ffmpeg.*=false\n"
-            "qt.ffmpeg.*=false\n"
-        )
+QString qt_multimedia_log_filter_rules() {
+    return QStringLiteral(
+        "qt.multimedia.*=false\n"
+        "qt.multimedia.ffmpeg.*=false\n"
+        "qt.ffmpeg.*=false\n"
     );
+}
+
+void configure_qt_multimedia_logging() {
+    qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", ",");
+    qputenv("QT_FFMPEG_ENCODING_HW_DEVICE_TYPES", ",");
+    qputenv("QT_LOGGING_RULES", qt_multimedia_log_filter_rules().toUtf8());
+    QLoggingCategory::setFilterRules(qt_multimedia_log_filter_rules());
 }
 
 void print_help() {
@@ -39,26 +48,34 @@ void print_help() {
 }
 
 #ifdef _WIN32
-void ensure_console() {
-    if (GetConsoleWindow() == nullptr) {
-        AllocConsole();
+void attach_parent_console_for_logging() {
+    if (GetConsoleWindow() == nullptr && !AttachConsole(ATTACH_PARENT_PROCESS)) {
+        return;
     }
 
     FILE* stream = nullptr;
     freopen_s(&stream, "CONOUT$", "w", stdout);
-    freopen_s(&stream, "CONOUT$", "w", stderr);
 }
 #endif
+
+void suppress_process_stderr() {
+#ifdef _WIN32
+    FILE* stream = nullptr;
+    freopen_s(&stream, "NUL", "w", stderr);
+#else
+    const int nullDescriptor = open("/dev/null", O_WRONLY);
+    if (nullDescriptor < 0) {
+        return;
+    }
+
+    dup2(nullDescriptor, fileno(stderr));
+    close(nullDescriptor);
+#endif
+}
 
 } // namespace
 
 int main(int argc, char* argv[]) {
-    suppress_qt_multimedia_logs();
-
-    QApplication app(argc, argv);
-    app.setApplicationName("sync-music-player");
-    app.setApplicationVersion(APP_VERSION);
-
     bool enableLogs = false;
     bool showHelp = false;
     MainWindow::MusicDirectoryMode musicDirectoryMode = MainWindow::MusicDirectoryMode::Auto;
@@ -81,13 +98,20 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    set_protocol_logs_enabled(enableLogs);
+    configure_qt_multimedia_logging();
 
 #ifdef _WIN32
     if (enableLogs || showHelp) {
-        ensure_console();
+        attach_parent_console_for_logging();
     }
 #endif
+    suppress_process_stderr();
+
+    QApplication app(argc, argv);
+    app.setApplicationName("sync-music-player");
+    app.setApplicationVersion(APP_VERSION);
+
+    set_protocol_logs_enabled(enableLogs);
 
     if (showHelp) {
         print_help();

@@ -6,21 +6,25 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QEventLoop>
+#include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
-#include <QMediaPlayer>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QListWidget>
+#include <QMediaPlayer>
 #include <QMouseEvent>
 #include <QNetworkAddressEntry>
 #include <QNetworkInterface>
 #include <QPalette>
 #include <QPixmap>
+#include <QPoint>
 #include <QPushButton>
-#include <QGuiApplication>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSet>
 #include <QSize>
@@ -31,14 +35,23 @@
 #include <QStyleOptionSlider>
 #include <QStyleHints>
 #include <QStringList>
-#include <QPoint>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <QWidget>
 
 #include <algorithm>
+#include <cstdio>
+#include <functional>
+
+#ifdef _WIN32
+    #include <io.h>
+#else
+    #include <fcntl.h>
+    #include <unistd.h>
+#endif
 
 namespace {
 
@@ -147,6 +160,57 @@ private:
     bool dragFromAnywhere_ = false;
 };
 
+class ShiftWheelListWidget : public QListWidget {
+public:
+    using QListWidget::QListWidget;
+
+protected:
+    void wheelEvent(QWheelEvent* event) override {
+        if (!(event->modifiers() & Qt::ShiftModifier)) {
+            QListWidget::wheelEvent(event);
+            return;
+        }
+
+        QScrollBar* horizontal = horizontalScrollBar();
+        if (horizontal == nullptr || horizontal->maximum() <= horizontal->minimum()) {
+            QListWidget::wheelEvent(event);
+            return;
+        }
+
+        const QPoint angleDelta = event->angleDelta();
+        const int delta = angleDelta.x() != 0 ? angleDelta.x() : angleDelta.y();
+        if (delta == 0) {
+            QListWidget::wheelEvent(event);
+            return;
+        }
+
+        horizontal->setValue(horizontal->value() - delta);
+        event->accept();
+    }
+};
+
+class ClickableRowWidget : public QWidget {
+public:
+    explicit ClickableRowWidget(std::function<void()> onClick, QWidget* parent = nullptr)
+        : QWidget(parent)
+        , onClick_(std::move(onClick)) {
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton && onClick_) {
+            onClick_();
+            event->accept();
+            return;
+        }
+
+        QWidget::mousePressEvent(event);
+    }
+
+private:
+    std::function<void()> onClick_;
+};
+
 QStringList musicNameFilters() {
     return {
         "*.mp3",
@@ -157,6 +221,88 @@ QStringList musicNameFilters() {
         "*.m4a"
     };
 }
+
+QString musicFileDialogFilter() {
+    return "Audio files (*.mp3 *.wav *.ogg *.flac *.aac *.m4a)";
+}
+
+QStringList musicDirectoryCandidates(MainWindow::MusicDirectoryMode mode) {
+    QStringList candidates;
+    switch (mode) {
+        case MainWindow::MusicDirectoryMode::ExecutableDirectory:
+            candidates << (QCoreApplication::applicationDirPath() + "/music");
+            break;
+        case MainWindow::MusicDirectoryMode::CurrentWorkingDirectory:
+            candidates << QDir::current().absoluteFilePath("music");
+            break;
+        case MainWindow::MusicDirectoryMode::Auto:
+            candidates << (QCoreApplication::applicationDirPath() + "/music");
+            candidates << QDir::current().absoluteFilePath("music");
+            break;
+    }
+
+    return candidates;
+}
+
+class ScopedStderrSilencer {
+public:
+    ScopedStderrSilencer() {
+#ifdef _WIN32
+        savedDescriptor_ = _dup(_fileno(stderr));
+        if (savedDescriptor_ < 0) {
+            return;
+        }
+
+        FILE* nullStream = nullptr;
+        if (freopen_s(&nullStream, "NUL", "w", stderr) != 0 || nullStream == nullptr) {
+            _close(savedDescriptor_);
+            savedDescriptor_ = -1;
+        }
+#else
+        savedDescriptor_ = dup(fileno(stderr));
+        if (savedDescriptor_ < 0) {
+            return;
+        }
+
+        const int nullDescriptor = open("/dev/null", O_WRONLY);
+        if (nullDescriptor < 0) {
+            close(savedDescriptor_);
+            savedDescriptor_ = -1;
+            return;
+        }
+
+        if (dup2(nullDescriptor, fileno(stderr)) < 0) {
+            close(nullDescriptor);
+            close(savedDescriptor_);
+            savedDescriptor_ = -1;
+            return;
+        }
+
+        close(nullDescriptor);
+#endif
+    }
+
+    ~ScopedStderrSilencer() {
+        if (savedDescriptor_ < 0) {
+            return;
+        }
+
+        fflush(stderr);
+#ifdef _WIN32
+        _dup2(savedDescriptor_, _fileno(stderr));
+        _close(savedDescriptor_);
+#else
+        dup2(savedDescriptor_, fileno(stderr));
+        close(savedDescriptor_);
+#endif
+    }
+
+    ScopedStderrSilencer(const ScopedStderrSilencer&) = delete;
+    ScopedStderrSilencer& operator=(const ScopedStderrSilencer&) = delete;
+
+private:
+    int savedDescriptor_ = -1;
+};
 
 qint64 probeTrackDurationWithQt(const QString& path) {
     if (path.isEmpty() || !QFileInfo::exists(path)) {
@@ -186,6 +332,7 @@ qint64 probeTrackDurationWithQt(const QString& path) {
         loop.quit();
     });
 
+    ScopedStderrSilencer silenceBackendNoise;
     player.setSource(QUrl::fromLocalFile(path));
     timeoutTimer.start(1500);
     loop.exec();
@@ -384,15 +531,23 @@ void MainWindow::buildUi() {
     libraryPathLabel_->setWordWrap(true);
 
     refreshLibraryButton_ = new QPushButton("Refresh folder", libraryGroup);
+    importMusicButton_ = new QPushButton("Add music", libraryGroup);
 
-    libraryList_ = new QListWidget(libraryGroup);
+    auto* libraryActionsRow = new QHBoxLayout();
+    libraryActionsRow->setContentsMargins(0, 0, 0, 0);
+    libraryActionsRow->setSpacing(8);
+    libraryActionsRow->addWidget(refreshLibraryButton_);
+    libraryActionsRow->addWidget(importMusicButton_);
+
+    libraryList_ = new ShiftWheelListWidget(libraryGroup);
     libraryList_->setSelectionMode(QAbstractItemView::SingleSelection);
     libraryList_->setAlternatingRowColors(true);
     libraryList_->setSpacing(4);
+    libraryList_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
 
     libraryLayout->addWidget(libraryTitle);
     libraryLayout->addWidget(libraryPathLabel_);
-    libraryLayout->addWidget(refreshLibraryButton_);
+    libraryLayout->addLayout(libraryActionsRow);
     libraryLayout->addWidget(libraryList_, 1);
 
     auto* centerColumn = new QWidget(central);
@@ -527,9 +682,10 @@ void MainWindow::buildUi() {
     clientsHelp->setWordWrap(true);
     clientsHelp->setObjectName("mutedLabel");
 
-    clientList_ = new QListWidget(clientsGroup);
+    clientList_ = new ShiftWheelListWidget(clientsGroup);
     clientList_->setSpacing(6);
     clientList_->setSelectionMode(QAbstractItemView::NoSelection);
+    clientList_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
 
     clientsLayout->addWidget(clientsTitle);
     clientsLayout->addWidget(clientsHelp);
@@ -546,6 +702,7 @@ void MainWindow::buildUi() {
 
     hostOnlyWidgets_ = {
         refreshLibraryButton_,
+        importMusicButton_,
         seekSlider_,
         previousButton_,
         playPauseButton_,
@@ -560,8 +717,11 @@ void MainWindow::buildUi() {
     connect(sessionActionButton_, &QPushButton::clicked, this, &MainWindow::handleSessionAction);
     connect(autoplayButton_, &QPushButton::clicked, this, &MainWindow::toggleAutoplay);
     connect(repeatModeButton_, &QPushButton::clicked, this, &MainWindow::cycleRepeatMode);
+    connect(importMusicButton_, &QPushButton::clicked, this, &MainWindow::importMusicFiles);
     connect(refreshLibraryButton_, &QPushButton::clicked, this, &MainWindow::refreshLibrary);
-    connect(libraryList_, &QListWidget::itemClicked, this, &MainWindow::handleLibrarySelectionChange);
+    connect(libraryList_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* current, QListWidgetItem*) {
+        handleLibrarySelectionChange(current);
+    });
     connect(endpointCombo_, &QComboBox::currentTextChanged, this, [this](const QString&) {
         updateModeUi();
     });
@@ -622,6 +782,15 @@ void MainWindow::applyPalette() {
     const QString arrowAsset = discoverAssetPath(
         useDarkTheme_ ? "chevron-down-light.svg" : "chevron-down-dark.svg"
     );
+    const QString comboBoxArrowRule = arrowAsset.isEmpty()
+        ? "QComboBox::down-arrow { image: none; width: 0px; height: 0px; }"
+        : QString(
+            "QComboBox::down-arrow {"
+            "  image: url(%1);"
+            "  width: 12px;"
+            "  height: 12px;"
+            "}"
+        ).arg(arrowAsset);
 
     if (useDarkTheme_) {
         setStyleSheet(QString(
@@ -750,11 +919,7 @@ void MainWindow::applyPalette() {
             "  border-bottom-right-radius: 12px;"
             "  background: #1f2937;"
             "}"
-            "QComboBox::down-arrow {"
-            "  image: url(%1);"
-            "  width: 12px;"
-            "  height: 12px;"
-            "}"
+            "%1"
             "QComboBox:disabled, QLineEdit:disabled {"
             "  background: #1b2432;"
             "  color: #6b7280;"
@@ -800,7 +965,7 @@ void MainWindow::applyPalette() {
             "  color: #cbd5e1;"
             "  border-top: 1px solid #374151;"
             "}"
-        ).arg(arrowAsset));
+        ).arg(comboBoxArrowRule));
         return;
     }
 
@@ -930,11 +1095,7 @@ void MainWindow::applyPalette() {
         "  border-bottom-right-radius: 12px;"
         "  background: #f8fafc;"
         "}"
-        "QComboBox::down-arrow {"
-        "  image: url(%1);"
-        "  width: 12px;"
-        "  height: 12px;"
-        "}"
+        "%1"
         "QComboBox:disabled, QLineEdit:disabled {"
         "  background: #f2f3f5;"
         "  color: #9ca3af;"
@@ -980,7 +1141,7 @@ void MainWindow::applyPalette() {
         "  color: #4b5563;"
         "  border-top: 1px solid #d8d8d8;"
         "}"
-    ).arg(arrowAsset));
+    ).arg(comboBoxArrowRule));
 }
 
 void MainWindow::handleSessionAction() {
@@ -1093,6 +1254,65 @@ void MainWindow::refreshTheme() {
     useDarkTheme_ = shouldUseDarkTheme();
 }
 
+void MainWindow::importMusicFiles() {
+    if (!hostMode_) {
+        return;
+    }
+
+    const QString targetDirectory = ensureMusicDirectory();
+    if (targetDirectory.isEmpty()) {
+        statusBar()->showMessage("Unable to create or locate the music folder.");
+        refreshLibrary();
+        return;
+    }
+
+    const QStringList selectedFiles = QFileDialog::getOpenFileNames(
+        this,
+        "Add music files",
+        QDir::homePath(),
+        musicFileDialogFilter()
+    );
+    if (selectedFiles.isEmpty()) {
+        return;
+    }
+
+    int copiedCount = 0;
+    int skippedCount = 0;
+
+    for (const QString& sourcePath : selectedFiles) {
+        const QFileInfo sourceInfo(sourcePath);
+        if (!sourceInfo.exists() || !sourceInfo.isFile()) {
+            ++skippedCount;
+            continue;
+        }
+
+        const QString destinationPath = QDir(targetDirectory).absoluteFilePath(sourceInfo.fileName());
+        if (QFileInfo(destinationPath).exists() ||
+            QFileInfo(destinationPath).absoluteFilePath() == sourceInfo.absoluteFilePath()) {
+            ++skippedCount;
+            continue;
+        }
+
+        if (QFile::copy(sourceInfo.absoluteFilePath(), destinationPath)) {
+            ++copiedCount;
+        }
+        else {
+            ++skippedCount;
+        }
+    }
+
+    refreshLibrary();
+
+    if (copiedCount > 0) {
+        statusBar()->showMessage(
+            QString("Imported %1 track(s). Skipped %2.").arg(copiedCount).arg(skippedCount)
+        );
+    }
+    else {
+        statusBar()->showMessage("No files were imported.");
+    }
+}
+
 void MainWindow::toggleAutoplay() {
     autoplayEnabled_ = !autoplayEnabled_;
     session_->setAutoplayEnabled(autoplayEnabled_);
@@ -1180,6 +1400,54 @@ void MainWindow::updateModeUi() {
     );
 
     updatePlaybackOptionUi();
+    updateLibraryActionButtons();
+}
+
+void MainWindow::removeTrackByRow(int row) {
+    if (!hostMode_) {
+        return;
+    }
+
+    const auto& playlist = session_->playlist();
+    if (row < 0 || row >= static_cast<int>(playlist.size())) {
+        return;
+    }
+
+    if (row == session_->currentTrackIndex()) {
+        return;
+    }
+
+    const auto& track = playlist[static_cast<size_t>(row)];
+    if (track.localPath.isEmpty()) {
+        return;
+    }
+
+    if (!QFile::remove(track.localPath)) {
+        statusBar()->showMessage("Failed to delete the selected track.");
+        return;
+    }
+
+    refreshLibrary();
+    statusBar()->showMessage("Track removed from the music folder.");
+}
+
+void MainWindow::updateLibraryActionButtons() {
+    const int currentIndex = session_->currentTrackIndex();
+
+    for (int row = 0; row < libraryList_->count(); ++row) {
+        QWidget* rowWidget = libraryList_->itemWidget(libraryList_->item(row));
+        if (rowWidget == nullptr) {
+            continue;
+        }
+
+        auto* deleteButton = rowWidget->findChild<QToolButton*>("libraryDeleteButton");
+        if (deleteButton == nullptr) {
+            continue;
+        }
+
+        const bool availableLocally = libraryList_->item(row)->data(Qt::UserRole + 3).toBool();
+        deleteButton->setEnabled(hostMode_ && availableLocally && row != currentIndex);
+    }
 }
 
 void MainWindow::updatePlaybackOptionUi() {
@@ -1190,7 +1458,7 @@ void MainWindow::updatePlaybackOptionUi() {
 
     switch (repeatMode_) {
         case RepeatMode::Queue:
-            repeatModeButton_->setText("Repeat: Queue");
+            repeatModeButton_->setText("Repeat: Queue (No)");
             break;
         case RepeatMode::Track:
             repeatModeButton_->setText("Repeat: Track");
@@ -1290,6 +1558,7 @@ void MainWindow::syncUiFromSession() {
     }
     volumeValueLabel_->setText(QString("%1%").arg(session_->sessionState().volumePercent));
 
+    updateLibraryActionButtons();
     updatePlaybackOptionUi();
     updateModeUi();
 }
@@ -1300,23 +1569,70 @@ void MainWindow::rebuildLibraryList() {
 
     const auto& playlist = session_->playlist();
     if (playlist.empty()) {
-        libraryList_->addItem(musicDirectory_.isEmpty()
-            ? "No music directory available"
-            : "Drop audio files into /music and press Refresh folder");
+        auto* placeholder = new QListWidgetItem(
+            musicDirectory_.isEmpty()
+                ? "No music directory available"
+                : "Add audio files to /music and press Refresh folder",
+            libraryList_
+        );
+        placeholder->setFlags(placeholder->flags() & ~Qt::ItemIsSelectable);
         return;
     }
 
-    for (const auto& track : playlist) {
-        auto* item = new QListWidgetItem(QString::fromStdString(track.descriptor.title), libraryList_);
+    for (size_t index = 0; index < playlist.size(); ++index) {
+        const auto& track = playlist[index];
+
+        auto* item = new QListWidgetItem(libraryList_);
         item->setData(Qt::UserRole, track.descriptor.trackId);
         item->setData(Qt::UserRole + 1, track.localPath);
         item->setData(Qt::UserRole + 2, static_cast<qulonglong>(track.descriptor.durationMs));
         item->setData(Qt::UserRole + 3, track.availableLocally);
         item->setToolTip(track.availableLocally ? track.localPath : QString::fromStdString(track.descriptor.fileName));
+
+        auto* rowWidget = new ClickableRowWidget([this, item]() {
+            libraryList_->setCurrentItem(item);
+        }, libraryList_);
+        auto* rowLayout = new QHBoxLayout(rowWidget);
+        rowLayout->setContentsMargins(8, 4, 8, 4);
+        rowLayout->setSpacing(10);
+
+        auto* textColumn = new QVBoxLayout();
+        textColumn->setContentsMargins(0, 0, 0, 0);
+        textColumn->setSpacing(2);
+
+        QString titleText = QString::fromStdString(track.descriptor.title);
         if (!track.availableLocally) {
-            item->setText(item->text() + " [remote]");
+            titleText += " [remote]";
         }
+
+        auto* titleLabel = new QLabel(titleText, rowWidget);
+        titleLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+        const QString subtitleText = track.availableLocally
+            ? QString::fromStdString(track.descriptor.fileName)
+            : QString("Remote file: %1").arg(QString::fromStdString(track.descriptor.fileName));
+        auto* subtitleLabel = new QLabel(subtitleText, rowWidget);
+        subtitleLabel->setObjectName("mutedLabel");
+        subtitleLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+        textColumn->addWidget(titleLabel);
+        textColumn->addWidget(subtitleLabel);
+
+        auto* deleteButton = new QToolButton(rowWidget);
+        deleteButton->setObjectName("libraryDeleteButton");
+        deleteButton->setText("x");
+        connect(deleteButton, &QToolButton::clicked, this, [this, index]() {
+            removeTrackByRow(static_cast<int>(index));
+        });
+
+        rowLayout->addLayout(textColumn, 1);
+        rowLayout->addWidget(deleteButton);
+
+        item->setSizeHint(QSize(std::max(rowWidget->sizeHint().width(), 0), 54));
+        libraryList_->setItemWidget(item, rowWidget);
     }
+
+    updateLibraryActionButtons();
 }
 
 void MainWindow::rebuildClientList() {
@@ -1325,7 +1641,6 @@ void MainWindow::rebuildClientList() {
     for (const auto& client : session_->clients()) {
         auto* item = new QListWidgetItem();
         item->setData(Qt::UserRole, client.clientId);
-        item->setSizeHint(QSize(0, 54));
 
         auto* rowWidget = new QWidget(clientList_);
         auto* rowLayout = new QHBoxLayout(rowWidget);
@@ -1376,6 +1691,7 @@ void MainWindow::rebuildClientList() {
         rowLayout->addWidget(kickButton);
 
         clientList_->addItem(item);
+        item->setSizeHint(QSize(std::max(rowWidget->sizeHint().width(), 0), 54));
         clientList_->setItemWidget(item, rowWidget);
     }
 }
@@ -1412,23 +1728,20 @@ void MainWindow::clearTrackPreview() {
 }
 
 QString MainWindow::discoverMusicDirectory() const {
-    QStringList candidates;
-    switch (musicDirectoryMode_) {
-        case MusicDirectoryMode::ExecutableDirectory:
-            candidates << (QCoreApplication::applicationDirPath() + "/music");
-            break;
-        case MusicDirectoryMode::CurrentWorkingDirectory:
-            candidates << QDir::current().absoluteFilePath("music");
-            break;
-        case MusicDirectoryMode::Auto:
-            candidates << (QCoreApplication::applicationDirPath() + "/music");
-            candidates << QDir::current().absoluteFilePath("music");
-            break;
-    }
-
-    for (const QString& candidate : candidates) {
+    for (const QString& candidate : musicDirectoryCandidates(musicDirectoryMode_)) {
         QDir dir(candidate);
         if (dir.exists()) {
+            return dir.absolutePath();
+        }
+    }
+
+    return {};
+}
+
+QString MainWindow::ensureMusicDirectory() const {
+    for (const QString& candidate : musicDirectoryCandidates(musicDirectoryMode_)) {
+        QDir dir(candidate);
+        if (dir.exists() || QDir().mkpath(candidate)) {
             return dir.absolutePath();
         }
     }
@@ -1441,21 +1754,12 @@ QString MainWindow::discoverLogoPath() const {
 }
 
 QString MainWindow::discoverAssetPath(const QString& fileName) const {
-    const QStringList candidates = {
-        QDir::current().absoluteFilePath("assets/" + fileName),
-        QCoreApplication::applicationDirPath() + "/assets/" + fileName,
-        QCoreApplication::applicationDirPath() + "/../assets/" + fileName,
-        QCoreApplication::applicationDirPath() + "/../../assets/" + fileName
-    };
-
-    for (const QString& candidate : candidates) {
-        QFileInfo info(candidate);
-        if (info.exists() && info.isFile()) {
-            return info.absoluteFilePath().replace('\\', '/');
-        }
-    }
-
+#if SYNC_MUSIC_PLAYER_HAS_EMBEDDED_ASSETS
+    return QString(":/assets/%1").arg(fileName);
+#else
+    Q_UNUSED(fileName);
     return {};
+#endif
 }
 
 QString MainWindow::endpointWithDefaultPort(const QString& endpoint) const {

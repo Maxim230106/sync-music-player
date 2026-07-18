@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/assets">
+        <file alias="sync-music-player_logo.png">../assets/sync-music-player_logo.png</file>
+        <file alias="chevron-down-dark.svg">../assets/chevron-down-dark.svg</file>
+        <file alias="chevron-down-light.svg">../assets/chevron-down-light.svg</file>
+    </qresource>
+</RCC>

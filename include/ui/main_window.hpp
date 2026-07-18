@@ -41,12 +41,15 @@ private:
     void buildUi();
     void applyPalette();
     void handleSessionAction();
+    void importMusicFiles();
     void populateAddressChoices();
     void refreshLibrary();
     void refreshTheme();
+    void removeTrackByRow(int row);
     void toggleAutoplay();
     void cycleRepeatMode();
     void updateModeUi();
+    void updateLibraryActionButtons();
     void updatePlaybackOptionUi();
     void syncUiFromSession();
     void rebuildLibraryList();
@@ -57,6 +60,7 @@ private:
     qint64 probeTrackDuration(const QString& path) const;
     QString discoverAssetPath(const QString& fileName) const;
     QString discoverMusicDirectory() const;
+    QString ensureMusicDirectory() const;
     QString discoverLogoPath() const;
     QString endpointWithDefaultPort(const QString& endpoint) const;
     QString formatDuration(qint64 durationMs) const;
@@ -73,6 +77,7 @@ private:
     QLabel* libraryPathLabel_ = nullptr;
     QListWidget* libraryList_ = nullptr;
     QPushButton* refreshLibraryButton_ = nullptr;
+    QPushButton* importMusicButton_ = nullptr;
     QLabel* currentTrackLabel_ = nullptr;
     QLabel* currentTrackMetaLabel_ = nullptr;
     QLabel* currentTimeLabel_ = nullptr;
