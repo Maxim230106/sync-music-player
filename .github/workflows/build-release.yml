@@ -49,9 +49,26 @@ jobs:
           cp build/sync-music-player.exe package/SyncMusicPlayer-Windows/
           cp -r build/music package/SyncMusicPlayer-Windows/music
           windeployqt6.exe --no-translations --release package/SyncMusicPlayer-Windows/sync-music-player.exe
-          cp /mingw64/bin/libstdc++-6.dll package/SyncMusicPlayer-Windows/
-          cp /mingw64/bin/libgcc_s_seh-1.dll package/SyncMusicPlayer-Windows/
-          cp /mingw64/bin/libwinpthread-1.dll package/SyncMusicPlayer-Windows/
+
+          package_root="package/SyncMusicPlayer-Windows"
+          changed=1
+          while [ "$changed" -ne 0 ]; do
+            changed=0
+            while IFS= read -r -d '' binary; do
+              while IFS= read -r dep; do
+                dep_path="/mingw64/bin/$dep"
+                if [ -f "$dep_path" ] && [ ! -f "$package_root/$dep" ]; then
+                  cp "$dep_path" "$package_root/"
+                  changed=1
+                fi
+              done < <(
+                objdump -p "$binary" \
+                  | sed -n 's/^[[:space:]]*DLL Name: //p'
+              )
+            done < <(
+              find "$package_root" -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0
+            )
+          done
 
       - name: Archive Windows package
         shell: pwsh
