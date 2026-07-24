@@ -3,5 +3,15 @@
         <file alias="sync-music-player_logo.png">../assets/sync-music-player_logo.png</file>
         <file alias="chevron-down-dark.svg">../assets/chevron-down-dark.svg</file>
         <file alias="chevron-down-light.svg">../assets/chevron-down-light.svg</file>
+        <file alias="play-dark.svg">../assets/play-dark.svg</file>
+        <file alias="play-light.svg">../assets/play-light.svg</file>
+        <file alias="pause-dark.svg">../assets/pause-dark.svg</file>
+        <file alias="pause-light.svg">../assets/pause-light.svg</file>
+        <file alias="stop-dark.svg">../assets/stop-dark.svg</file>
+        <file alias="stop-light.svg">../assets/stop-light.svg</file>
+        <file alias="prev-dark.svg">../assets/prev-dark.svg</file>
+        <file alias="prev-light.svg">../assets/prev-light.svg</file>
+        <file alias="next-dark.svg">../assets/next-dark.svg</file>
+        <file alias="next-light.svg">../assets/next-light.svg</file>
     </qresource>
 </RCC>

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(sync-music-player VERSION 1.0.3 LANGUAGES CXX)
+project(sync-music-player VERSION 1.0.4 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,6 +15,16 @@ set(SYNC_MUSIC_PLAYER_REQUIRED_ASSETS
     "${CMAKE_SOURCE_DIR}/assets/sync-music-player_logo.png"
     "${CMAKE_SOURCE_DIR}/assets/chevron-down-dark.svg"
     "${CMAKE_SOURCE_DIR}/assets/chevron-down-light.svg"
+    "${CMAKE_SOURCE_DIR}/assets/play-dark.svg"
+    "${CMAKE_SOURCE_DIR}/assets/play-light.svg"
+    "${CMAKE_SOURCE_DIR}/assets/pause-dark.svg"
+    "${CMAKE_SOURCE_DIR}/assets/pause-light.svg"
+    "${CMAKE_SOURCE_DIR}/assets/stop-dark.svg"
+    "${CMAKE_SOURCE_DIR}/assets/stop-light.svg"
+    "${CMAKE_SOURCE_DIR}/assets/prev-dark.svg"
+    "${CMAKE_SOURCE_DIR}/assets/prev-light.svg"
+    "${CMAKE_SOURCE_DIR}/assets/next-dark.svg"
+    "${CMAKE_SOURCE_DIR}/assets/next-light.svg"
 )
 
 foreach(asset_file IN LISTS SYNC_MUSIC_PLAYER_REQUIRED_ASSETS)

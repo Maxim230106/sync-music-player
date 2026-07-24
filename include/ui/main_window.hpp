@@ -8,6 +8,7 @@
 #include <vector>
 
 class QComboBox;
+class QEvent;
 class QLabel;
 class QListWidget;
 class QListWidgetItem;
@@ -59,11 +60,15 @@ private:
     void clearTrackPreview();
     qint64 probeTrackDuration(const QString& path) const;
     QString discoverAssetPath(const QString& fileName) const;
+    QString discoverTransportIconPath(const QString& baseName) const;
+    void updateEndpointComboChevronUi();
     QString discoverMusicDirectory() const;
     QString ensureMusicDirectory() const;
     QString discoverLogoPath() const;
     QString endpointWithDefaultPort(const QString& endpoint) const;
     QString formatDuration(qint64 durationMs) const;
+    void updateTransportButtonUi();
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
     static constexpr int kDefaultPort = 54000;
 
@@ -72,6 +77,7 @@ private:
     QLabel* subtitleLabel_ = nullptr;
     QPushButton* roleToggleButton_ = nullptr;
     QComboBox* endpointCombo_ = nullptr;
+    QLabel* endpointComboChevronLabel_ = nullptr;
     QPushButton* sessionActionButton_ = nullptr;
     QLabel* modeBadgeLabel_ = nullptr;
     QLabel* libraryPathLabel_ = nullptr;

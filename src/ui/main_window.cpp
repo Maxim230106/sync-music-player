@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
@@ -484,6 +485,12 @@ void MainWindow::buildUi() {
     endpointCombo_->setEditable(true);
     endpointCombo_->setInsertPolicy(QComboBox::NoInsert);
     endpointCombo_->setMinimumContentsLength(24);
+    endpointCombo_->installEventFilter(this);
+
+    endpointComboChevronLabel_ = new QLabel("v", endpointCombo_);
+    endpointComboChevronLabel_->setAlignment(Qt::AlignCenter);
+    endpointComboChevronLabel_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    endpointComboChevronLabel_->hide();
 
     sessionActionButton_ = new QPushButton(sessionCard);
     sessionActionButton_->setObjectName("primaryButton");
@@ -597,6 +604,7 @@ void MainWindow::buildUi() {
         button->setFixedWidth(84);
         button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     }
+    updateTransportButtonUi();
     transportRow->addStretch(1);
     transportRow->addWidget(previousButton_);
     transportRow->addWidget(playPauseButton_);
@@ -783,8 +791,26 @@ void MainWindow::applyPalette() {
         useDarkTheme_ ? "chevron-down-light.svg" : "chevron-down-dark.svg"
     );
     const QString comboBoxArrowRule = arrowAsset.isEmpty()
-        ? "QComboBox::down-arrow { image: none; width: 0px; height: 0px; }"
+        ? QString(
+            "QComboBox { padding-right: 36px; }"
+            "QComboBox::drop-down {"
+            "  subcontrol-origin: padding;"
+            "  subcontrol-position: top right;"
+            "  width: 32px;"
+            "  border: none;"
+            "  background: transparent;"
+            "}"
+            "QComboBox::down-arrow { image: none; width: 0px; height: 0px; }"
+        )
         : QString(
+            "QComboBox { padding-right: 36px; }"
+            "QComboBox::drop-down {"
+            "  subcontrol-origin: padding;"
+            "  subcontrol-position: top right;"
+            "  width: 32px;"
+            "  border: none;"
+            "  background: transparent;"
+            "}"
             "QComboBox::down-arrow {"
             "  image: url(%1);"
             "  width: 12px;"
@@ -966,6 +992,7 @@ void MainWindow::applyPalette() {
             "  border-top: 1px solid #374151;"
             "}"
         ).arg(comboBoxArrowRule));
+        updateEndpointComboChevronUi();
         return;
     }
 
@@ -1142,6 +1169,7 @@ void MainWindow::applyPalette() {
         "  border-top: 1px solid #d8d8d8;"
         "}"
     ).arg(comboBoxArrowRule));
+    updateEndpointComboChevronUi();
 }
 
 void MainWindow::handleSessionAction() {
@@ -1252,6 +1280,7 @@ void MainWindow::refreshLibrary() {
 
 void MainWindow::refreshTheme() {
     useDarkTheme_ = shouldUseDarkTheme();
+    updateTransportButtonUi();
 }
 
 void MainWindow::importMusicFiles() {
@@ -1452,9 +1481,7 @@ void MainWindow::updateLibraryActionButtons() {
 
 void MainWindow::updatePlaybackOptionUi() {
     autoplayButton_->setText(autoplayEnabled_ ? "Autoplay: On" : "Autoplay: Off");
-    playPauseButton_->setText(
-        session_->sessionState().playbackState == PlaybackState::Playing ? "Pause" : "Play"
-    );
+    updateTransportButtonUi();
 
     switch (repeatMode_) {
         case RepeatMode::Queue:
@@ -1760,6 +1787,91 @@ QString MainWindow::discoverAssetPath(const QString& fileName) const {
     Q_UNUSED(fileName);
     return {};
 #endif
+}
+
+QString MainWindow::discoverTransportIconPath(const QString& baseName) const {
+    return discoverAssetPath(
+        QString("%1-%2.svg").arg(baseName, useDarkTheme_ ? "light" : "dark")
+    );
+}
+
+void MainWindow::updateEndpointComboChevronUi() {
+    if (endpointCombo_ == nullptr || endpointComboChevronLabel_ == nullptr) {
+        return;
+    }
+
+    const QString arrowAsset = discoverAssetPath(
+        useDarkTheme_ ? "chevron-down-light.svg" : "chevron-down-dark.svg"
+    );
+    const bool useTextChevron = arrowAsset.isEmpty();
+
+    endpointComboChevronLabel_->setVisible(useTextChevron);
+    if (!useTextChevron) {
+        return;
+    }
+
+    endpointComboChevronLabel_->setStyleSheet(
+        QString("color: %1; font-size: 15px; font-weight: 700; background: transparent;")
+            .arg(useDarkTheme_ ? "#cbd5e1" : "#4b5563")
+    );
+
+    const QRect comboRect = endpointCombo_->rect();
+    const int chevronWidth = 20;
+    endpointComboChevronLabel_->setGeometry(
+        comboRect.width() - chevronWidth - 10,
+        0,
+        chevronWidth,
+        comboRect.height()
+    );
+    endpointComboChevronLabel_->raise();
+}
+
+void MainWindow::updateTransportButtonUi() {
+    const bool isPlaying = session_ != nullptr &&
+        session_->sessionState().playbackState == PlaybackState::Playing;
+
+    struct TransportButtonState {
+        QPushButton* button;
+        QString iconBaseName;
+        QString fallbackText;
+    };
+
+    const std::array<TransportButtonState, 4> buttons = {{
+        {previousButton_, "prev", "Prev"},
+        {playPauseButton_, isPlaying ? "pause" : "play", isPlaying ? "Pause" : "Play"},
+        {stopButton_, "stop", "Stop"},
+        {nextButton_, "next", "Next"},
+    }};
+
+    for (const TransportButtonState& state : buttons) {
+        if (state.button == nullptr) {
+            continue;
+        }
+
+        const QString iconPath = discoverTransportIconPath(state.iconBaseName);
+        const QIcon icon(iconPath);
+        if (!iconPath.isEmpty() && !icon.isNull()) {
+            state.button->setIcon(icon);
+            state.button->setIconSize(QSize(18, 18));
+            state.button->setText({});
+            state.button->setToolTip(state.fallbackText);
+            state.button->setAccessibleName(state.fallbackText);
+        }
+        else {
+            state.button->setIcon(QIcon());
+            state.button->setText(state.fallbackText);
+            state.button->setToolTip({});
+            state.button->setAccessibleName(state.fallbackText);
+        }
+    }
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == endpointCombo_ && event != nullptr && event->type() == QEvent::Resize) {
+        updateEndpointComboChevronUi();
+    }
+
+    return QMainWindow::eventFilter(watched, event);
 }
 
 QString MainWindow::endpointWithDefaultPort(const QString& endpoint) const {
